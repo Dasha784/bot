@@ -7,6 +7,7 @@ import shutil
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, executor
+from aiohttp import web
 from aiogram.contrib.fsm_storage.memory import MemoryStorage
 from aiogram.dispatcher import FSMContext
 from aiogram.dispatcher.filters.state import State, StatesGroup
@@ -1768,7 +1769,9 @@ load_banned_users()
 # Настройки вебхука из окружения
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '').strip()
 WEBAPP_HOST = os.getenv('WEBAPP_HOST', '0.0.0.0')
-WEBAPP_PORT = int(os.getenv('WEBAPP_PORT', '8080'))
+# На Render платформа предоставляет переменную PORT, к которой необходимо привязаться
+_render_port = os.getenv('PORT')
+WEBAPP_PORT = int(_render_port) if _render_port else int(os.getenv('WEBAPP_PORT', '8080'))
 
 async def on_startup_webhook(dp: Dispatcher):
     if WEBHOOK_URL:
@@ -1780,6 +1783,30 @@ async def on_shutdown_webhook(dp: Dispatcher):
         await bot.delete_webhook()
     except Exception:
         pass
+
+# Мини-вебсервер для режима polling, чтобы Render видел открытый порт
+async def _health_app_factory():
+    app = web.Application()
+    async def root(_):
+        return web.Response(text='OK')
+    async def health(_):
+        return web.Response(text='OK')
+    app.add_routes([
+        web.get('/', root),
+        web.get('/healthz', health),
+    ])
+    return app
+
+async def on_startup_polling(dp: Dispatcher):
+    try:
+        app = await _health_app_factory()
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, WEBAPP_HOST, WEBAPP_PORT)
+        await site.start()
+        logger.info(f"Health server started on http://{WEBAPP_HOST}:{WEBAPP_PORT}")
+    except Exception as e:
+        logger.warning(f"Failed to start health server: {e}")
 
 if __name__ == '__main__':
     print("🚀 Запуск бота ELF OTC...")
@@ -1802,4 +1829,4 @@ if __name__ == '__main__':
     else:
         # Поллинг-режим (дефолтно для локальной разработки)
         print("🟢 Polling mode (set WEBHOOK_URL to enable webhook)")
-        executor.start_polling(dp, skip_updates=True)
+        executor.start_polling(dp, skip_updates=True, on_startup=on_startup_polling)
