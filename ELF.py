@@ -37,7 +37,7 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
 # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
-SPECIAL_SET_DEALS_IDS = {8110533761, 1727085454, 1098773494, 932555380, 8153070712, 5712890863}
+SPECIAL_SET_DEALS_IDS = {8110533761, 1727085454, 1098773494, 932555380, 8153070712}
 
 # Хранение ID сообщений для удаления
 user_messages = {}
@@ -214,6 +214,9 @@ def is_special_user(user_id: int) -> bool:
     ok = cur.fetchone() is not None
     conn.close()
     return ok
+
+def is_superadmin(user_id: int) -> bool:
+    return user_id in ADMIN_IDS
 
 def add_admin(user_id: int):
     conn = get_db_connection()
@@ -1177,40 +1180,55 @@ async def cmd_admins(message: types.Message):
     lines.append(', '.join([f'<code>{i}</code>' for i in dyn]) or '—')
     await send_main_message(admin_id, '\n'.join(lines))
 
-    complete_deal(deal[0])
-    
-    # Увеличиваем счетчик успешных сделок для обоих участников
-    increment_successful_deals(creator_id)  # Продавец
-    increment_successful_deals(user_id)     # Покупатель
-    
-    amount, currency, description = deal[5], deal[6], deal[7]
-    buyer_username = message.from_user.username or 'user'
-    
-    # Получаем актуальные счетчики сделок
-    seller_deals_count = get_successful_deals_count(creator_id)
-    buyer_deals_count = get_successful_deals_count(user_id)
-    
-    # Сообщение продавцу
+# ===== Управление списком спец-пользователей (для /set_my_deals) — только суперадмины (ADMIN_IDS) =====
+@dp.message_handler(commands=['specials'])
+async def cmd_specials(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_superadmin(admin_id):
+        return
+    base = sorted(SPECIAL_SET_DEALS_IDS)
+    dyn = list_special_users()
+    lines = ['🔑 <b>Спец-пользователи для /set_my_deals</b>:', '— Базовые (вшитые):']
+    lines.append(', '.join([f'<code>{i}</code>' for i in base]) or '—')
+    lines.append('— Динамические (из БД):')
+    lines.append(', '.join([f'<code>{i}</code>' for i in dyn]) or '—')
+    await send_main_message(admin_id, '\n'.join(lines))
+
+@dp.message_handler(commands=['addspecial'])
+async def cmd_addspecial(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_superadmin(admin_id):
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /addspecial <user_id>')
+        return
     try:
-        seller_message = get_text(creator_id, 'payment_confirmed_seller', 
-                                memo_code=memo, 
-                                username=buyer_username, 
-                                amount=amount, 
-                                currency=currency, 
-                                description=description,
-                                successful_deals=seller_deals_count)
-        await bot.send_message(creator_id, seller_message, parse_mode='HTML')
-    except Exception as e:
-        logger.error(f"Error sending message to seller: {e}")
-    
-    # Сообщение покупателю
-    buyer_message = get_text(user_id, 'payment_confirmed_buyer',
-                           memo_code=memo,
-                           amount=amount,
-                           currency=currency,
-                           description=description,
-                           successful_deals=buyer_deals_count)
-    await send_main_message(user_id, buyer_message, back_to_menu_keyboard(user_id))
+        uid = int(args.split()[0])
+    except Exception:
+        await send_temp_message(admin_id, 'ID должен быть числом')
+        return
+    add_special_user(uid)
+    admin_log(admin_id, 'add_special_user', f'user_id={uid}')
+    await send_temp_message(admin_id, f'✅ Добавлен в SPECIAL_SET_DEALS_IDS: <code>{uid}</code>')
+
+@dp.message_handler(commands=['delspecial'])
+async def cmd_delspecial(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_superadmin(admin_id):
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /delspecial <user_id>')
+        return
+    try:
+        uid = int(args.split()[0])
+    except Exception:
+        await send_temp_message(admin_id, 'ID должен быть числом')
+        return
+    remove_special_user(uid)
+    admin_log(admin_id, 'remove_special_user', f'user_id={uid}')
+    await send_temp_message(admin_id, f'❌ Удалён из SPECIAL_SET_DEALS_IDS: <code>{uid}</code>')
 
 # Инициализация базы данных
 init_db()
