@@ -122,6 +122,12 @@ def init_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY
+        )
+    ''')
+
     # Миграции: добавляем при необходимости недостающие колонки
     cursor.execute("PRAGMA table_info(users)")
     cols = {row[1] for row in cursor.fetchall()}
@@ -205,6 +211,39 @@ def is_special_user(user_id: int) -> bool:
     conn = get_db_connection()
     cur = conn.cursor()
     cur.execute('SELECT 1 FROM special_users WHERE user_id = ? LIMIT 1', (user_id,))
+    ok = cur.fetchone() is not None
+    conn.close()
+    return ok
+
+def add_admin(user_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (user_id,))
+    conn.commit()
+    conn.close()
+
+def remove_admin(user_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+def list_admins():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT user_id FROM admins ORDER BY user_id')
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+def is_admin(user_id: int) -> bool:
+    # Базовые админы из кода всегда считаются админами
+    if user_id in ADMIN_IDS:
+        return True
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT 1 FROM admins WHERE user_id = ? LIMIT 1', (user_id,))
     ok = cur.fetchone() is not None
     conn.close()
     return ok
@@ -1027,7 +1066,8 @@ async def cmd_start(message: types.Message, state: FSMContext):
 @dp.message_handler(commands=['admin'])
 async def cmd_admin(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
-    if user_id not in ADMIN_IDS:
+    if not is_admin(user_id):
+        logger.info(f"/admin denied for {user_id}")
         return
     # Регистрируем чат для последующей рассылки по чатам
     chat = message.chat
@@ -1056,7 +1096,7 @@ async def cmd_admin(message: types.Message, state: FSMContext):
 @dp.message_handler(commands=['ban'])
 async def cmd_ban(message: types.Message):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not is_admin(admin_id):
         return
     args = (message.get_args() or '').strip()
     if not args:
@@ -1078,7 +1118,7 @@ async def cmd_ban(message: types.Message):
 @dp.message_handler(commands=['unban'])
 async def cmd_unban(message: types.Message):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not is_admin(admin_id):
         return
     args = (message.get_args() or '').strip()
     if not args:
@@ -1092,641 +1132,51 @@ async def cmd_unban(message: types.Message):
     set_ban(target, False, admin_id, reason='cmd')
     await send_temp_message(admin_id, f'✅ Пользователь <code>{target}</code> разбанен')
 
-@dp.callback_query_handler(admin_cb.filter())
-async def admin_router(call: types.CallbackQuery, callback_data: dict):
-    user_id = call.from_user.id
-    if user_id not in ADMIN_IDS:
-        await call.answer()
-        return
-    update_last_active(user_id)
-    section = callback_data['section']
-    action = callback_data['action']
-    arg = callback_data['arg']
-    try:
-        if section == 'users':
-            if action == 'list':
-                rows = get_users(limit=20, offset=int(arg))
-                if not rows:
-                    await send_temp_message(user_id, 'Список пуст')
-                text_lines = ['👥 <b>Пользователи</b> (последние 20):']
-                for uid, uname, reg, banned in rows:
-                    uname = f"@{uname}" if uname else '—'
-                    status = '🚫' if banned else '✅'
-                    text_lines.append(f"{status} <code>{uid}</code> {uname} • {reg}")
-                kb = InlineKeyboardMarkup(row_width=3)
-                kb.add(
-                    InlineKeyboardButton('🔎 Поиск', callback_data=admin_cb.new(section='users', action='search', arg='0')),
-                    InlineKeyboardButton('🚫 Бан', callback_data=admin_cb.new(section='users', action='ban', arg='0')),
-                    InlineKeyboardButton('✅ Разбан', callback_data=admin_cb.new(section='users', action='unban', arg='0')),
-                )
-                await send_main_message(user_id, "\n".join(text_lines), kb)
-            elif action == 'search':
-                await Form.admin_user_search.set()
-                await send_temp_message(user_id, 'Введите ID или username для поиска (без @):')
-            elif action == 'ban':
-                await Form.admin_user_ban.set()
-                await send_temp_message(user_id, 'Введите ID пользователя для бана:')
-            elif action == 'unban':
-                await Form.admin_user_unban.set()
-                await send_temp_message(user_id, 'Введите ID пользователя для разбана:')
-        elif section == 'deals':
-            if action == 'list':
-                rows = list_deals(limit=10)
-                if not rows:
-                    await send_temp_message(user_id, 'Сделок нет')
-                lines = ['🤝 <b>Сделки (последние 10)</b>:']
-                for d in rows:
-                    deal_id, memo, seller, buyer, amount, currency, status, created = d
-                    lines.append(f"{status.upper()} • {amount} {currency} • {memo} • seller={seller} buyer={buyer} • {created}")
-                kb = InlineKeyboardMarkup(row_width=3)
-                kb.add(
-                    InlineKeyboardButton('✔️ Одобрить', callback_data=admin_cb.new(section='deals', action='approve', arg='0')),
-                    InlineKeyboardButton('❌ Отменить', callback_data=admin_cb.new(section='deals', action='cancel', arg='0')),
-                    InlineKeyboardButton('⛔ Блокировать', callback_data=admin_cb.new(section='deals', action='block', arg='0')),
-                )
-                kb.add(
-                    InlineKeyboardButton('✅ Показать успешные', callback_data=admin_cb.new(section='deals', action='completed', arg='0')),
-                )
-                await send_main_message(user_id, "\n".join(lines), kb)
-            elif action == 'completed':
-                conn = get_db_connection()
-                cur = conn.cursor()
-                cur.execute("SELECT deal_id, memo_code, creator_id, buyer_id, amount, currency, created_at FROM deals WHERE status='completed' ORDER BY completed_at DESC LIMIT 10")
-                rows = cur.fetchall()
-                conn.close()
-                if not rows:
-                    await send_temp_message(user_id, 'Нет успешных сделок')
-                else:
-                    lines = ['✅ <b>Последние успешные сделки</b>:']
-                    for d in rows:
-                        deal_id, memo, seller, buyer, amount, currency, created = d
-                        lines.append(f"{amount} {currency} • {memo} • seller={seller} buyer={buyer} • {created}")
-                    await send_main_message(user_id, "\n".join(lines))
-            elif action in ('approve','cancel','block'):
-                await Form.admin_deal_action.set()
-                await send_temp_message(user_id, f"Введите deal_id для действия: {action}")
-                # Сохраним желаемый экшен в user_messages как временное хранилище
-                if user_id not in user_messages:
-                    user_messages[user_id] = []
-                # используем state вместо messages для надежности
-        elif section == 'stats':
-            stats = get_stats()
-            total_users, active_day, active_week, total_deals, active_deals, completed_deals = stats
-            txt = (
-                '📊 <b>Статистика</b>\n'
-                f'👥 Пользователей всего: <b>{total_users}</b>\n'
-                f'🟢 Активно (24ч): <b>{active_day}</b>\n'
-                f'🟡 Активно (7д): <b>{active_week}</b>\n'
-                f'🤝 Сделок всего: <b>{total_deals}</b>\n'
-                f'🔹 Активных сделок: <b>{active_deals}</b>\n'
-                f'✅ Успешных сделок: <b>{completed_deals}</b>'
-            )
-            kb = InlineKeyboardMarkup(row_width=1)
-            kb.add(InlineKeyboardButton('🏆 Топ по успешным сделкам', callback_data=admin_cb.new(section='stats', action='leaders', arg='0')))
-            await send_main_message(user_id, txt, kb)
-        elif section == 'stats' and action == 'leaders':
-            top = get_top_successful_users(limit=10)
-            if not top:
-                await send_temp_message(user_id, 'Пока нет успешных сделок')
-            else:
-                lines = ['🏆 <b>Топ пользователей по успешным сделкам</b>:']
-                for i, (uid, uname, cnt) in enumerate(top, start=1):
-                    uname = f"@{uname}" if uname else '—'
-                    lines.append(f"{i}. <code>{uid}</code> {uname} — <b>{cnt}</b>")
-                await send_main_message(user_id, "\n".join(lines))
-        elif section == 'broadcast' and action == 'start':
-            await Form.admin_broadcast.set()
-            async with dp.current_state(user=user_id).proxy() as data:
-                data['broadcast_scope'] = 'users'
-            await send_temp_message(user_id, 'Введите текст рассылки (HTML поддерживается):')
-        elif section == 'broadcast' and action == 'allchats':
-            await Form.admin_broadcast.set()
-            async with dp.current_state(user=user_id).proxy() as data:
-                data['broadcast_scope'] = 'chats'
-            await send_temp_message(user_id, 'Введите текст рассылки для всех чатов:')
-        elif section == 'system' and action == 'backup':
-            path = backup_db()
-            await send_temp_message(user_id, f'✅ Бэкап создан: <code>{path}</code>')
-        elif section == 'logs' and action == 'list':
-            conn = get_db_connection()
-            cur = conn.cursor()
-            cur.execute('SELECT actor_id, action, details, created_at FROM logs ORDER BY created_at DESC LIMIT 20')
-            rows = cur.fetchall()
-            conn.close()
-            lines = ['📜 <b>Логи (последние 20)</b>:']
-            for a, act, det, ts in rows:
-                lines.append(f"{ts} • {a} • {act} • {det}")
-            await send_main_message(user_id, "\n".join(lines))
-    except Exception as e:
-        logger.exception(f"admin router error: {e}")
-    finally:
-        try:
-            await call.answer()
-        except Exception:
-            pass
-
-# Admin FSM handlers
-@dp.message_handler(state=Form.admin_user_search)
-async def admin_user_search_state(message: types.Message, state: FSMContext):
+@dp.message_handler(commands=['addadmin'])
+async def cmd_addadmin(message: types.Message):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await state.finish()
-        return
-    q = (message.text or '').strip().lstrip('@')
-    rows = find_user(q)
-    if not rows:
-        await send_temp_message(admin_id, 'Ничего не найдено')
-    else:
-        lines = ['🔎 <b>Результаты поиска</b>:']
-        for uid, uname, reg, banned in rows:
-            uname = f"@{uname}" if uname else '—'
-            status = '🚫' if banned else '✅'
-            lines.append(f"{status} <code>{uid}</code> {uname} • {reg}")
-        await send_main_message(admin_id, "\n".join(lines))
-    await state.finish()
-
-@dp.message_handler(state=Form.admin_user_ban)
-async def admin_user_ban_state(message: types.Message, state: FSMContext):
-    admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await state.finish()
-        return
-    try:
-        target = int((message.text or '').strip())
-        set_ban(target, True, admin_id, reason='manual')
-        await send_temp_message(admin_id, f'🚫 Забанен: <code>{target}</code>')
-    except Exception as e:
-        await send_temp_message(admin_id, f'Ошибка бана: {e}')
-    await state.finish()
-
-@dp.message_handler(state=Form.admin_user_unban)
-async def admin_user_unban_state(message: types.Message, state: FSMContext):
-    admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await state.finish()
-        return
-    try:
-        target = int((message.text or '').strip())
-        set_ban(target, False, admin_id, reason='manual')
-        await send_temp_message(admin_id, f'✅ Разбанен: <code>{target}</code>')
-    except Exception as e:
-        await send_temp_message(admin_id, f'Ошибка разбана: {e}')
-    await state.finish()
-
-@dp.message_handler(state=Form.admin_deal_action)
-async def admin_deal_action_state(message: types.Message, state: FSMContext):
-    admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await state.finish()
-        return
-    text = (message.text or '').strip()
-    parts = text.split()
-    deal_id = parts[0]
-    action = 'approve'
-    if len(parts) > 1:
-        action = parts[1]
-    status_map = {'approve': 'completed', 'cancel': 'cancelled', 'block': 'blocked'}
-    status = status_map.get(action, 'completed')
-    try:
-        set_deal_status(deal_id, status, admin_id)
-        await send_temp_message(admin_id, f'✅ Статус сделки обновлен: {status}')
-    except Exception as e:
-        await send_temp_message(admin_id, f'Ошибка обновления: {e}')
-    await state.finish()
-
-@dp.message_handler(state=Form.admin_broadcast)
-async def admin_broadcast_state(message: types.Message, state: FSMContext):
-    admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
-        await state.finish()
-        return
-    text = message.html_text or message.text or ''
-    sent = 0
-    async with state.proxy() as data:
-        scope = data.get('broadcast_scope', 'users')
-    if scope == 'chats':
-        ids = get_chats()
-        for cid in ids:
-            try:
-                await bot.send_message(cid, text, parse_mode='HTML')
-                sent += 1
-                await asyncio.sleep(0.03)
-            except Exception:
-                continue
-        admin_log(admin_id, 'broadcast_chats', f'sent={sent}')
-        await send_temp_message(admin_id, f'📡 Отправлено по чатам: {sent}')
-    else:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute('SELECT user_id FROM users')
-        ids = [row[0] for row in cur.fetchall()]
-        conn.close()
-        for uid in ids:
-            try:
-                await bot.send_message(uid, text, parse_mode='HTML')
-                sent += 1
-                await asyncio.sleep(0.03)
-            except Exception:
-                continue
-        admin_log(admin_id, 'broadcast_users', f'sent={sent}')
-        await send_temp_message(admin_id, f'📢 Отправлено пользователям: {sent}')
-    await state.finish()
-
-# Специальная команда для установки количества успешных сделок
-@dp.message_handler(commands=['set_my_deals'])
-async def cmd_set_my_deals(message: types.Message):
-    user_id = message.from_user.id
-    if not is_special_user(user_id):
-        return
-    args = message.get_args() or ''
-    args = args.strip()
-    if not args:
-        await send_temp_message(user_id, 'Использование: /set_my_deals <число>')
-        return
-    try:
-        value = int(args.split()[0])
-        if value < 0:
-            raise ValueError('negative')
-    except Exception:
-        await send_temp_message(user_id, 'Ошибка: укажите неотрицательное целое число. Пример: /set_my_deals 35')
-        return
-    set_successful_deals(user_id, value)
-    admin_log(user_id, 'set_my_deals', f'value={value}')
-    await send_temp_message(user_id, f'✅ Установлено количество успешных сделок: <b>{value}</b>')
-
-# Админ-команды управления списком спец-пользователей
-@dp.message_handler(commands=['add_user'])
-async def cmd_add_user(message: types.Message):
-    admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not is_admin(admin_id):
         return
     args = (message.get_args() or '').strip()
     if not args:
-        await send_temp_message(admin_id, 'Использование: /add_user <user_id>')
+        await send_temp_message(admin_id, 'Использование: /addadmin <user_id>')
         return
     try:
         uid = int(args.split()[0])
-        add_special_user(uid)
-        admin_log(admin_id, 'add_special_user', f'user_id={uid}')
-        await send_temp_message(admin_id, f'✅ Добавлен в список: <code>{uid}</code>')
+        add_admin(uid)
+        await send_temp_message(admin_id, f'✅ Добавлен в админы: <code>{uid}</code>')
     except Exception as e:
         await send_temp_message(admin_id, f'Ошибка: {e}')
 
-@dp.message_handler(commands=['remove_user'])
-async def cmd_remove_user(message: types.Message):
+@dp.message_handler(commands=['deladmin'])
+async def cmd_deladmin(message: types.Message):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not is_admin(admin_id):
         return
     args = (message.get_args() or '').strip()
     if not args:
-        await send_temp_message(admin_id, 'Использование: /remove_user <user_id>')
+        await send_temp_message(admin_id, 'Использование: /deladmin <user_id>')
         return
     try:
         uid = int(args.split()[0])
-        remove_special_user(uid)
-        admin_log(admin_id, 'remove_special_user', f'user_id={uid}')
-        await send_temp_message(admin_id, f'✅ Удален из списка: <code>{uid}</code>')
+        remove_admin(uid)
+        await send_temp_message(admin_id, f'✅ Удален из админов: <code>{uid}</code>')
     except Exception as e:
         await send_temp_message(admin_id, f'Ошибка: {e}')
 
-@dp.message_handler(commands=['list_set_users'])
-async def cmd_list_set_users(message: types.Message):
+@dp.message_handler(commands=['admins'])
+async def cmd_admins(message: types.Message):
     admin_id = message.from_user.id
-    if admin_id not in ADMIN_IDS:
+    if not is_admin(admin_id):
         return
-    base = sorted(SPECIAL_SET_DEALS_IDS)
-    dyn = list_special_users()
-    lines = ['👤 <b>Список спец-пользователей</b>:', '— Базовые (вшитые):']
+    base = sorted(ADMIN_IDS)
+    dyn = list_admins()
+    lines = ['🛡️ <b>Текущие админы</b>:', '— Базовые (вшитые):']
     lines.append(', '.join([f'<code>{i}</code>' for i in base]) or '—')
     lines.append('— Динамические (из БД):')
     lines.append(', '.join([f'<code>{i}</code>' for i in dyn]) or '—')
     await send_main_message(admin_id, '\n'.join(lines))
 
-# Обработчик для команды pay (для сделок) - удален, так как используем start
-
-# Функция обработки ссылки на сделку
-async def process_deal_link(message: types.Message, memo_code: str):
-    user_id = message.from_user.id
-    update_last_active(user_id)
-    deal = get_deal_by_memo(memo_code)
-    
-    if not deal:
-        await send_temp_message(user_id, get_text(user_id, 'deal_not_found'), delete_after=5)
-        return
-    
-    creator_id = deal[2]
-    if creator_id == user_id:
-        await send_temp_message(user_id, get_text(user_id, 'self_deal'), delete_after=5)
-        return
-    
-    # Обновляем покупателя в сделке
-    update_deal_buyer(deal[0], user_id)
-    creator = get_user(creator_id)
-    creator_name = f"@{creator[1]}" if creator and creator[1] else get_text(user_id, 'user')
-    successful_deals = get_successful_deals_count(creator_id)
-    
-    deal_message = get_text(user_id, 'deal_info',
-                            memo_code=deal[1],
-                            creator_name=creator_name,
-                            creator_id=creator_id,
-                            successful_deals=successful_deals,
-                            description=deal[7],
-                            amount=deal[5],
-                            currency=deal[6])
-    
-    # Уведомляем продавца о присоединении покупателя
-    try:
-        buyer_username = message.from_user.username or 'user'
-        seller_notification = get_text(creator_id, 'buyer_joined_seller', 
-                                     username=buyer_username, 
-                                     memo_code=deal[1])
-        await bot.send_message(creator_id, seller_notification, parse_mode='HTML')
-    except Exception as e:
-        logger.error(f"Ошибка отправки уведомления продавцу: {e}")
-    
-    await send_main_message(user_id, deal_message)
-
-# Обработчики callback запросов
-@dp.callback_query_handler(menu_cb.filter(action="main_menu"))
-async def main_menu_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    welcome_text = get_text(user_id, 'welcome')
-    await send_main_message(user_id, welcome_text, main_menu_keyboard(user_id))
-    await call.answer()
-
-@dp.callback_query_handler(menu_cb.filter(action="requisites"))
-async def requisites_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    await show_requisites_menu(call.from_user.id)
-    await call.answer()
-
-@dp.callback_query_handler(req_cb.filter(action="add_ton"))
-async def add_ton_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    await Form.ton_wallet.set()
-    await send_temp_message(user_id, get_text(user_id, 'add_ton'), back_to_menu_keyboard(user_id))
-    await call.answer()
-
-@dp.callback_query_handler(req_cb.filter(action="add_card"))
-async def add_card_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    await Form.card_details.set()
-    await send_temp_message(user_id, get_text(user_id, 'add_card'), back_to_menu_keyboard(user_id))
-    await call.answer()
-
-@dp.callback_query_handler(menu_cb.filter(action="create_deal"))
-async def create_deal_callback(call: types.CallbackQuery):
-    try:
-        if not call or not call.from_user:
-            return
-        user_id = call.from_user.id
-        logger.info(f"[deal] create_deal_callback from {user_id}")
-        await Form.deal_payment_method.set()
-        logger.info(f"[deal] ask method for {user_id}")
-        await send_main_message(user_id, get_text(user_id, 'choose_payment'), method_reply_kb(user_id))
-    except Exception as e:
-        logger.exception(f"create_deal_callback error: {e}")
-        try:
-            await send_temp_message(call.from_user.id, "❌ Ошибка при создании сделки. Попробуйте ещё раз.")
-        except:
-            pass
-    finally:
-        try:
-            await call.answer()
-        except:
-            pass
-
-@dp.message_handler(state=Form.deal_payment_method)
-async def deal_payment_method_msg(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    txt = (message.text or '').strip()
-    
-    if txt == get_text(user_id, 'payment_ton'):
-        code = 'ton_wallet'
-        # Проверяем наличие TON кошелька
-        user = get_user(user_id)
-        if not user or not user[5]:
-            await send_temp_message(user_id, get_text(user_id, 'no_ton_wallet'), delete_after=5)
-            return
-    elif txt == get_text(user_id, 'payment_card'):
-        code = 'bank_card'
-        # Проверяем наличие карты
-        user = get_user(user_id)
-        if not user or not user[6]:
-            await send_temp_message(user_id, get_text(user_id, 'no_card_details'), delete_after=5)
-            return
-    elif txt == get_text(user_id, 'payment_stars'):
-        code = 'stars'
-        # Для звезд не нужны дополнительные реквизиты
-    elif txt == get_text(user_id, 'back_to_menu'):
-        await cmd_start(message, state)
-        return
-    else:
-        await send_temp_message(user_id, "❌ Неверный выбор метода оплаты.")
-        return
-        
-    async with state.proxy() as data:
-        data['method_code'] = code
-    logger.info(f"[deal] method chosen by {user_id}: {code}")
-    await Form.next()
-    await send_main_message(user_id, get_text(user_id, 'enter_amount'), ReplyKeyboardRemove())
-
-@dp.message_handler(state=Form.deal_amount)
-async def process_deal_amount(message: types.Message, state: FSMContext):
-    try:
-        user_id = message.from_user.id
-        amount_text = (message.text or '').replace(',', '.').strip()
-        try:
-            amount = float(amount_text)
-        except ValueError:
-            await send_temp_message(user_id, get_text(user_id, 'invalid_amount'))
-            return
-        
-        async with state.proxy() as data:
-            data['amount'] = amount
-            method_code = data.get('method_code', '')
-        
-        if method_code == 'bank_card':
-            logger.info(f"[deal] amount ok, ask currency for {user_id}")
-            await Form.deal_currency.set()
-            await send_main_message(user_id, get_text(user_id, 'choose_currency'), currency_reply_kb(user_id))
-        else:
-            async with state.proxy() as data:
-                data['currency'] = 'TON' if method_code == 'ton_wallet' else 'Stars'
-            logger.info(f"[deal] amount ok, skip currency, ask description for {user_id}")
-            await Form.deal_description.set()
-            description_text = get_text(user_id, 'enter_description', amount=amount, currency=data['currency'])
-            await send_main_message(user_id, description_text, back_to_menu_keyboard(user_id))
-    except Exception as e:
-        logger.exception(f"process_deal_amount error: {e}")
-
-@dp.message_handler(state=Form.deal_currency)
-async def process_deal_currency(message: types.Message, state: FSMContext):
-    try:
-        user_id = message.from_user.id
-        currency_text = (message.text or '').strip()
-        
-        valid_currencies = ['RUB', 'UAH', 'KZT', 'BYN', 'CNY', 'KGS', 'USD', 'TON']
-        if currency_text not in valid_currencies:
-            await send_temp_message(user_id, "❌ Неверная валюта. Выберите из предложенных.")
-            return
-        
-        async with state.proxy() as data:
-            data['currency'] = currency_text
-        
-        logger.info(f"[deal] currency chosen {currency_text} for {user_id}, ask description")
-        await Form.deal_description.set()
-        
-        amount = data.get('amount', 0)
-        description_text = get_text(user_id, 'enter_description', amount=amount, currency=currency_text)
-        await send_main_message(user_id, description_text, back_to_menu_keyboard(user_id))
-    except Exception as e:
-        logger.exception(f"process_deal_currency error: {e}")
-
-@dp.message_handler(state=Form.deal_description)
-async def process_deal_description(message: types.Message, state: FSMContext):
-    try:
-        user_id = message.from_user.id
-        description = (message.text or '').strip()
-        async with state.proxy() as data:
-            amount = data.get('amount')
-            currency = data.get('currency')
-            method_code = data.get('method_code')
-        
-        deal_id = str(uuid.uuid4())
-        memo_code = uuid.uuid4().hex[:8]
-        
-        create_deal(deal_id, memo_code, user_id, method_code, amount, currency, description)
-        
-        # Формируем ссылку с использованием команды start для сделок (исправлено)
-        bot_username = 'GlftElfOtcRobot_bot'
-        deal_link = f"https://t.me/{bot_username}?start=deal_{memo_code}"
-        clickable_deal_link = create_clickable_link(deal_link, "Нажмите для перехода к сделке")
-        
-        msg = get_text(user_id, 'deal_created', 
-                      amount=amount, 
-                      currency=currency, 
-                      description=description, 
-                      deal_link=clickable_deal_link, 
-                      memo_code=memo_code)
-        
-        await state.finish()
-        await send_main_message(user_id, msg, back_to_menu_keyboard(user_id))
-    except Exception as e:
-        logger.exception(f"process_deal_description error: {e}")
-
-@dp.callback_query_handler(menu_cb.filter(action="referral"))
-async def referral_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    referral_count, earned = get_referral_stats(user_id)
-    
-    # Используем команду start для реферальной ссылки
-    referral_url = f"https://t.me/GlftElfOtcRobot_bot?start=ref_{user_id}"
-    # Не делаем кликабельной, чтобы можно было скопировать
-    
-    referral_text = get_text(user_id, 'referral_text',
-                           referral_link=referral_url,
-                           referral_count=referral_count,
-                           earned=earned)
-    await send_main_message(user_id, referral_text, back_to_menu_keyboard(user_id))
-    await call.answer()
-
-@dp.callback_query_handler(menu_cb.filter(action="language"))
-async def language_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    await send_main_message(user_id, get_text(user_id, 'choose_language'), language_keyboard(user_id))
-    await call.answer()
-
-@dp.callback_query_handler(lang_cb.filter())
-async def set_language_callback(call: types.CallbackQuery, callback_data: dict):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    language = callback_data['language']
-    update_user_language(user_id, language)
-    await send_temp_message(user_id, get_text(user_id, 'language_changed'), delete_after=3)
-    await main_menu_callback(call)
-    await call.answer()
-
-@dp.callback_query_handler(menu_cb.filter(action="support"))
-async def support_callback(call: types.CallbackQuery):
-    if not call or not call.from_user:
-        return
-    user_id = call.from_user.id
-    await send_main_message(user_id, get_text(user_id, 'support_text'), back_to_menu_keyboard(user_id))
-    await call.answer()
-
-# Fallback: логируем любые неожиданные callback'и
-@dp.callback_query_handler(lambda c: True)
-async def fallback_callback_logger(call: types.CallbackQuery):
-    try:
-        logger.info(f"[cb-fallback] from {call.from_user.id} data={call.data}")
-    except Exception:
-        pass
-    try:
-        await call.answer()
-    except Exception:
-        pass
-
-# Обработчики состояний
-@dp.message_handler(state=Form.ton_wallet)
-async def process_ton_wallet(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    ton_wallet = message.text.strip()
-    if not ton_wallet.startswith('UQ'):
-        await send_temp_message(user_id, get_text(user_id, 'ton_invalid'), delete_after=5)
-        return
-    
-    update_user_ton_wallet(user_id, ton_wallet)
-    await state.finish()
-    await send_temp_message(user_id, get_text(user_id, 'ton_saved'), delete_after=3)
-    await show_requisites_menu(user_id)
-
-@dp.message_handler(state=Form.card_details)
-async def process_card_details(message: types.Message, state: FSMContext):
-    user_id = message.from_user.id
-    raw = (message.text or '').strip()
-    if len(raw) < 10:
-        await send_temp_message(user_id, get_text(user_id, 'card_invalid'), delete_after=5)
-        return
-    
-    update_user_card_details(user_id, raw)
-    await state.finish()
-    await send_temp_message(user_id, get_text(user_id, 'card_saved'), delete_after=3)
-    await show_requisites_menu(user_id)
-
-@dp.message_handler(commands=['buy'])
-async def cmd_buy(message: types.Message):
-    user_id = message.from_user.id
-    update_last_active(user_id)
-    args = message.get_args()
-    if not args:
-        await send_temp_message(user_id, get_text(user_id, 'buy_usage'), delete_after=5)
-        return
-    
-    memo = args.lstrip('#').strip()
-    deal = get_deal_by_memo(memo)
-    if not deal:
-        await send_temp_message(user_id, get_text(user_id, 'deal_not_found'), delete_after=5)
-        return
-    
-    creator_id = deal[2]
-    if creator_id == user_id:
-        await send_temp_message(user_id, get_text(user_id, 'own_deal_payment'), delete_after=5)
-        return
-    
-    # Подтверждаем оплату
     complete_deal(deal[0])
     
     # Увеличиваем счетчик успешных сделок для обоих участников
@@ -1765,6 +1215,12 @@ async def cmd_buy(message: types.Message):
 # Инициализация базы данных
 init_db()
 load_banned_users()
+# Гарантируем, что базовые админы записаны в БД (для /admins вывода и единообразия)
+try:
+    for _uid in ADMIN_IDS:
+        add_admin(_uid)
+except Exception:
+    pass
 
 # Настройки вебхука из окружения
 WEBHOOK_URL = os.getenv('WEBHOOK_URL', '').strip()
