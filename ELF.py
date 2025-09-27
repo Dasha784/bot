@@ -657,6 +657,119 @@ def language_keyboard(user_id):
     keyboard.add(InlineKeyboardButton(get_text(user_id, 'back_to_menu'), callback_data=menu_cb.new(action="main_menu")))
     return keyboard
 
+# ===== Callback handlers =====
+@dp.callback_query_handler(menu_cb.filter())
+async def menu_router(call: types.CallbackQuery, callback_data: dict):
+    user_id = call.from_user.id
+    action = callback_data.get('action')
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    if action == 'main_menu':
+        await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
+    elif action == 'requisites':
+        user = get_user(user_id)
+        ton = user[5] if user and len(user) > 5 and user[5] else TEXTS[get_user_language(user_id)]['not_added']
+        card = user[6] if user and len(user) > 6 and user[6] else TEXTS[get_user_language(user_id)]['not_added']
+        text = get_text(user_id, 'requisites_menu', ton_wallet=ton, card_details=card)
+        await send_main_message(user_id, text, requisites_management_keyboard(user_id))
+    elif action == 'language':
+        await send_main_message(user_id, get_text(user_id, 'choose_language'), language_keyboard(user_id))
+    elif action == 'support':
+        await send_main_message(user_id, get_text(user_id, 'support_text'), back_to_menu_keyboard(user_id))
+    elif action == 'referral':
+        # Минимальный вывод реферальной информации без генерации ссылки
+        await send_main_message(user_id, get_text(user_id, 'referral_text', referral_link='—'), back_to_menu_keyboard(user_id))
+    elif action == 'create_deal':
+        # Переходим в выбор способа оплаты через reply-клавиатуру, если FSM-хендлеры уже реализованы
+        await send_main_message(user_id, get_text(user_id, 'choose_payment'), payment_method_keyboard(user_id))
+
+@dp.callback_query_handler(lang_cb.filter())
+async def lang_router(call: types.CallbackQuery, callback_data: dict):
+    user_id = call.from_user.id
+    lang = callback_data.get('language') or 'ru'
+    try:
+        update_user_language(user_id, lang)
+    except Exception:
+        pass
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    await send_temp_message(user_id, get_text(user_id, 'language_changed'))
+    await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
+
+@dp.callback_query_handler(req_cb.filter())
+async def req_router(call: types.CallbackQuery, callback_data: dict, state: FSMContext):
+    user_id = call.from_user.id
+    action = callback_data.get('action')
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    if action == 'add_ton':
+        await state.set_state(Form.ton_wallet.state)
+        await send_main_message(user_id, get_text(user_id, 'add_ton'), ReplyKeyboardRemove())
+    elif action == 'add_card':
+        await state.set_state(Form.card_details.state)
+        await send_main_message(user_id, get_text(user_id, 'add_card'), ReplyKeyboardRemove())
+
+@dp.callback_query_handler(deal_cb.filter())
+async def deal_router(call: types.CallbackQuery, callback_data: dict, state: FSMContext):
+    user_id = call.from_user.id
+    action = callback_data.get('action')
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    # Сохраняем выбранный метод оплаты и запрашиваем сумму
+    await state.update_data(payment_method=action)
+    await state.set_state(Form.deal_amount.state)
+    await send_main_message(user_id, get_text(user_id, 'enter_amount'), ReplyKeyboardRemove())
+
+@dp.callback_query_handler(currency_cb.filter())
+async def currency_router(call: types.CallbackQuery, callback_data: dict, state: FSMContext):
+    user_id = call.from_user.id
+    code = callback_data.get('code')
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    await state.update_data(currency=code)
+    await state.set_state(Form.deal_description.state)
+    data = await state.get_data()
+    amount = data.get('amount') or ''
+    await send_main_message(user_id, get_text(user_id, 'enter_description', amount=amount or '—', currency=code), ReplyKeyboardRemove())
+
+@dp.message_handler(commands=['diag_admin'])
+async def cmd_diag_admin(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+    args = (message.get_args() or '').strip()
+    if args:
+        try:
+            uid = int(args.split()[0])
+        except Exception:
+            await send_temp_message(admin_id, 'Использование: /diag_admin <user_id>')
+            return
+    else:
+        uid = admin_id
+    # Проверка статуса в БД
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT 1 FROM admins WHERE user_id = ? LIMIT 1', (uid,))
+    in_db = cur.fetchone() is not None
+    conn.close()
+    text = (
+        f"ID: <code>{uid}</code>\n"
+        f"ADMIN_IDS: {'✅' if uid in ADMIN_IDS else '❌'}\n"
+        f"admins (DB): {'✅' if in_db else '❌'}\n"
+        f"is_admin(): {'✅' if is_admin(uid) else '❌'}"
+    )
+    await send_main_message(admin_id, text)
+
 # Reply-клавиатуры для устойчивого FSM без callback
 def method_reply_kb(user_id):
     return ReplyKeyboardMarkup(
