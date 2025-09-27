@@ -37,7 +37,7 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
 # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
-SPECIAL_SET_DEALS_IDS = {8110533761, 1727085454, 1098773494, 932555380, 8153070712, 5712890863}
+SPECIAL_SET_DEALS_IDS = {8110533761, 1727085454, 1098773494, 932555380, 8153070712}
 
 # Хранение ID сообщений для удаления
 user_messages = {}
@@ -667,6 +667,19 @@ def method_reply_kb(user_id):
             [KeyboardButton(get_text(user_id, 'back_to_menu'))],
         ], resize_keyboard=True
     )
+
+# ===== Diagnostic: catch-all callback handler (temporary) =====
+@dp.callback_query_handler()
+async def _diag_any_callback(call: types.CallbackQuery):
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    # Show raw callback data to confirm buttons are working
+    try:
+        await send_temp_message(call.from_user.id, f"callback: <code>{call.data}</code>")
+    except Exception:
+        pass
 
 def currency_reply_kb(user_id):
     return ReplyKeyboardMarkup(
