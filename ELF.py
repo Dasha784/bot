@@ -742,6 +742,53 @@ async def currency_router(call: types.CallbackQuery, callback_data: dict, state:
     amount = data.get('amount') or ''
     await send_main_message(user_id, get_text(user_id, 'enter_description', amount=amount or '—', currency=code), ReplyKeyboardRemove())
 
+@dp.message_handler(state=Form.deal_amount)
+async def handle_deal_amount(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    text = (message.text or '').strip().replace(',', '.')
+    try:
+        amount = float(text)
+        if amount <= 0:
+            raise ValueError()
+    except Exception:
+        await send_temp_message(user_id, get_text(user_id, 'invalid_amount'))
+        return
+    await state.update_data(amount=amount)
+    await send_main_message(user_id, get_text(user_id, 'choose_currency'), currency_keyboard(user_id))
+
+@dp.message_handler(state=Form.deal_description)
+async def handle_deal_description(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    description = (message.text or '').strip()
+    if not description:
+        await send_temp_message(user_id, get_text(user_id, 'enter_description', amount='', currency=''))
+        return
+    data = await state.get_data()
+    payment_method = data.get('payment_method') or 'unknown'
+    amount = data.get('amount')
+    currency = data.get('currency') or 'RUB'
+    memo_code = uuid.uuid4().hex[:8].upper()
+    deal_id = str(uuid.uuid4())
+    try:
+        create_deal(deal_id, memo_code, user_id, payment_method, amount, currency, description)
+    except Exception as e:
+        logger.exception(f"Failed to create deal: {e}")
+        await send_temp_message(user_id, get_text(user_id, 'command_error'))
+        return
+    # Try to build a deep-link for buyer
+    try:
+        me = await bot.get_me()
+        bot_username = me.username or ''
+        if bot_username:
+            deal_link = f"https://t.me/{bot_username}?start=buy_{memo_code}"
+        else:
+            deal_link = f"#buy_{memo_code}"
+    except Exception:
+        deal_link = f"#buy_{memo_code}"
+    await state.finish()
+    text = get_text(user_id, 'deal_created', amount=amount, currency=currency, description=description, deal_link=deal_link, memo_code=memo_code)
+    await send_main_message(user_id, text, back_to_menu_keyboard(user_id))
+
 @dp.message_handler(commands=['diag_admin'])
 async def cmd_diag_admin(message: types.Message):
     admin_id = message.from_user.id
