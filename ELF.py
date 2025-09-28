@@ -1220,6 +1220,61 @@ async def cmd_unban(message: types.Message):
     set_ban(target, False, admin_id, reason='cmd')
     await send_temp_message(admin_id, f'✅ Пользователь <code>{target}</code> разбанен')
 
+# === Diagnostics and Special Users management (for /set_my_deals) ===
+@dp.message_handler(commands=['whoami'])
+async def cmd_whoami(message: types.Message):
+    uid = message.from_user.id
+    uname = message.from_user.username or ''
+    is_admin_flag = '✅' if is_admin(uid) else '❌'
+    await send_temp_message(uid, f'ID: <code>{uid}</code>\nUsername: @{uname}\nAdmin: {is_admin_flag}')
+
+@dp.message_handler(commands=['add_user'])
+async def cmd_add_user(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /add_user <user_id>')
+        return
+    try:
+        uid = int(args.split()[0])
+        add_special_user(uid)
+        admin_log(admin_id, 'add_special_user', f'user_id={uid}')
+        await send_temp_message(admin_id, f'✅ Добавлен в список: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+
+@dp.message_handler(commands=['remove_user'])
+async def cmd_remove_user(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /remove_user <user_id>')
+        return
+    try:
+        uid = int(args.split()[0])
+        remove_special_user(uid)
+        admin_log(admin_id, 'remove_special_user', f'user_id={uid}')
+        await send_temp_message(admin_id, f'✅ Удален из списка: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+
+@dp.message_handler(commands=['list_set_users'])
+async def cmd_list_set_users(message: types.Message):
+    admin_id = message.from_user.id
+    if not is_admin(admin_id):
+        return
+    base = sorted(SPECIAL_SET_DEALS_IDS)
+    dyn = list_special_users()
+    lines = ['👤 <b>Список спец-пользователей</b>:', '— Базовые (вшитые):']
+    lines.append(', '.join([f'<code>{i}</code>' for i in base]) or '—')
+    lines.append('— Динамические (из БД):')
+    lines.append(', '.join([f'<code>{i}</code>' for i in dyn]) or '—')
+    await send_main_message(admin_id, '\n'.join(lines))
+
 @dp.message_handler(commands=['addadmin'])
 async def cmd_addadmin(message: types.Message):
     admin_id = message.from_user.id
