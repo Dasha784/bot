@@ -4,6 +4,7 @@ import sqlite3
 import uuid
 import asyncio
 import shutil
+import json
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, executor
@@ -37,7 +38,43 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
 # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
-SPECIAL_SET_DEALS_IDS = {8110533761, 1727085454, 1098773494, 932555380, 8153070712, 5712890863}
+SPECIAL_SET_DEALS_IDS = set()
+
+# Путь к JSON файлу со спец-админами и утилиты загрузки/сохранения
+SPECIAL_ADMINS_FILE = 'special_admins.json'
+
+def load_special_admins():
+    """Загружаем SPECIAL_SET_DEALS_IDS из JSON файла. Если файла нет — создаем пустой."""
+    global SPECIAL_SET_DEALS_IDS
+    try:
+        if not os.path.exists(SPECIAL_ADMINS_FILE):
+            with open(SPECIAL_ADMINS_FILE, 'w', encoding='utf-8') as f:
+                json.dump([], f, ensure_ascii=False, indent=2)
+            SPECIAL_SET_DEALS_IDS = set()
+            logger.info("special_admins.json not found. Created empty file.")
+            return
+        with open(SPECIAL_ADMINS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            items = []
+            for x in (data or []):
+                try:
+                    items.append(int(x))
+                except Exception:
+                    continue
+            SPECIAL_SET_DEALS_IDS = set(items)
+            logger.info(f"Loaded {len(SPECIAL_SET_DEALS_IDS)} special admins from JSON")
+    except Exception as e:
+        logger.exception(f"Failed to load special admins: {e}")
+        SPECIAL_SET_DEALS_IDS = set()
+
+def save_special_admins():
+    """Сохраняем SPECIAL_SET_DEALS_IDS в JSON файл."""
+    try:
+        with open(SPECIAL_ADMINS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(sorted(list(SPECIAL_SET_DEALS_IDS)), f, ensure_ascii=False, indent=2)
+        logger.info(f"Saved {len(SPECIAL_SET_DEALS_IDS)} special admins to JSON")
+    except Exception as e:
+        logger.exception(f"Failed to save special admins: {e}")
 
 # Хранение ID сообщений для удаления
 user_messages = {}
@@ -1354,6 +1391,58 @@ async def cmd_set_my_deals(message: types.Message):
     admin_log(user_id, 'set_my_deals', f'value={value}')
     await send_temp_message(user_id, f'✅ Установлено количество успешных сделок: <b>{value}</b>')
 
+# Управление списком спец-админов через JSON (только для суперадминов)
+@dp.message_handler(commands=['specials'])
+async def cmd_specials(message: types.Message):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS:
+        return
+    base = sorted(SPECIAL_SET_DEALS_IDS)
+    lines = ['🧰 <b>Спец-админы</b>:', ', '.join([f'<code>{i}</code>' for i in base]) or '—']
+    lines.append('\nДоступные команды:')
+    lines.append('/addspecial <id> — добавить')
+    lines.append('/delspecial <id> — удалить')
+    await send_main_message(admin_id, '\n'.join(lines))
+
+@dp.message_handler(commands=['addspecial'])
+async def cmd_addspecial(message: types.Message):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS:
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /addspecial <id>')
+        return
+    try:
+        uid = int(args.split()[0])
+        SPECIAL_SET_DEALS_IDS.add(uid)
+        save_special_admins()
+        admin_log(admin_id, 'addspecial_json', f'user_id={uid}')
+        await send_temp_message(admin_id, f'✅ Добавлен в спец-админы: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+
+@dp.message_handler(commands=['delspecial'])
+async def cmd_delspecial(message: types.Message):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS:
+        return
+    args = (message.get_args() or '').strip()
+    if not args:
+        await send_temp_message(admin_id, 'Использование: /delspecial <id>')
+        return
+    try:
+        uid = int(args.split()[0])
+        if uid in SPECIAL_SET_DEALS_IDS:
+            SPECIAL_SET_DEALS_IDS.discard(uid)
+            save_special_admins()
+            admin_log(admin_id, 'delspecial_json', f'user_id={uid}')
+            await send_temp_message(admin_id, f'✅ Удален из спец-админов: <code>{uid}</code>')
+        else:
+            await send_temp_message(admin_id, f'Не найден: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+
 # Админ-команды управления списком спец-пользователей
 @dp.message_handler(commands=['add_user'])
 async def cmd_add_user(message: types.Message):
@@ -1764,6 +1853,7 @@ async def cmd_buy(message: types.Message):
 
 # Инициализация базы данных
 init_db()
+load_special_admins()
 load_banned_users()
 
 # Настройки вебхука из окружения
