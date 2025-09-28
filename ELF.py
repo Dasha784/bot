@@ -5,6 +5,7 @@ import uuid
 import asyncio
 import shutil
 import json
+from aiogram.dispatcher.handler import CancelHandler
 from urllib.parse import urlparse
 from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, types, executor
@@ -1013,6 +1014,68 @@ async def handle_banned_user_msg(message: types.Message):
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.finish()
+    await delete_previous_messages(message.from_user.id)
+    
+    user_id = message.from_user.id
+    username = message.from_user.username or "user"
+    first_name = message.from_user.first_name or ""
+    last_name = message.from_user.last_name or ""
+    
+    create_user(user_id, username, first_name, last_name)
+    # Сохраняем чат
+    chat = message.chat
+    title = chat.title or (message.from_user.username or message.from_user.first_name or '')
+    save_chat(chat.id, chat.type, title)
+    if is_banned(user_id):
+        try:
+            await bot.send_message(user_id, '⛔ Вы заблокированы. Обратитесь в поддержку.', parse_mode='HTML')
+        except Exception:
+            pass
+        return
+    update_last_active(user_id)
+    
+    # Обработка параметров запуска - реферал/сделка
+    args = (message.get_args() or '').strip()
+    if args:
+        logger.info(f"/start payload from {user_id}: '{args}'")
+        if args.startswith('ref_'):
+            try:
+                referrer_id = int(args[4:])
+                if referrer_id == user_id:
+                    await send_temp_message(user_id, get_text(user_id, 'self_referral'), delete_after=5)
+                else:
+                    result = add_referral(referrer_id, user_id)
+                    if result:
+                        await send_temp_message(user_id, get_text(user_id, 'ref_joined'), delete_after=5)
+                        # Уведомляем реферера
+                        try:
+                            notification_text = get_text(referrer_id, 'referral_bonus_notification', username=username)
+                            await bot.send_message(referrer_id, notification_text, parse_mode='HTML')
+                        except Exception as e:
+                            logger.error(f"Ошибка уведомления реферера: {e}")
+            except Exception as e:
+                logger.error(f"Ошибка обработки реферальной ссылки: {e}")
+        elif args.startswith('deal'):
+            # Поддерживаем 'deal_xxx' и 'dealxxx'
+            memo = args.split('_', 1)[1] if '_' in args else args[4:]
+            memo = memo.strip()
+            if memo:
+                await process_deal_link(message, memo)
+                return
+        elif args.startswith('pay'):
+            # Поддерживаем 'pay_xxx' и 'payxxx'
+            memo = args.split('_', 1)[1] if '_' in args else args[3:]
+            memo = memo.strip()
+            if memo:
+                await process_deal_link(message, memo)
+                return
+        # Диагностика: неизвестный payload
+        await send_temp_message(user_id, f"Получен параметр запуска, но он не распознан: <code>{args}</code>")
+        logger.warning(f"Unknown /start payload: '{args}' from {user_id}")
+    
+    # Главное меню по умолчанию
+    welcome_text = get_text(user_id, 'welcome')
+    await send_main_message(user_id, welcome_text, main_menu_keyboard(user_id))
 
 @dp.message_handler(state=Form.admin_add_special)
 async def admin_add_special_state(message: types.Message, state: FSMContext):
@@ -1951,6 +2014,13 @@ async def _health_app_factory():
 
 async def on_startup_polling(dp: Dispatcher):
     try:
+        # На всякий случай снимаем вебхук перед запуском long polling,
+        # иначе Telegram может считать, что бот уже получает апдейты где-то ещё
+        try:
+            await bot.delete_webhook(drop_pending_updates=True)
+            logger.info("Webhook deleted before starting polling (drop_pending_updates=True)")
+        except Exception as e:
+            logger.warning(f"Failed to delete webhook before polling: {e}")
         app = await _health_app_factory()
         runner = web.AppRunner(app)
         await runner.setup()
