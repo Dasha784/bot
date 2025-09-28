@@ -668,18 +668,90 @@ def method_reply_kb(user_id):
         ], resize_keyboard=True
     )
 
-# ===== Diagnostic: catch-all callback handler (temporary) =====
-@dp.callback_query_handler()
-async def _diag_any_callback(call: types.CallbackQuery):
+# ===== Menu callback handler (restored minimal functions) =====
+@dp.callback_query_handler(menu_cb.filter())
+async def menu_router(call: types.CallbackQuery, callback_data: dict):
+    user_id = call.from_user.id
+    action = callback_data.get('action')
     try:
         await call.answer()
     except Exception:
         pass
-    # Show raw callback data to confirm buttons are working
+    if action == 'main_menu':
+        await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
+        return
+    if action == 'requisites':
+        user = get_user(user_id)
+        ton = user[5] if user and len(user) > 5 and user[5] else TEXTS[get_user_language(user_id)]['not_added']
+        card = user[6] if user and len(user) > 6 and user[6] else TEXTS[get_user_language(user_id)]['not_added']
+        text = get_text(user_id, 'requisites_menu', ton_wallet=ton, card_details=card)
+        await send_main_message(user_id, text, requisites_management_keyboard(user_id))
+        return
+    if action == 'language':
+        await send_main_message(user_id, get_text(user_id, 'choose_language'), language_keyboard(user_id))
+        return
+    if action == 'support':
+        await send_main_message(user_id, get_text(user_id, 'support_text'), back_to_menu_keyboard(user_id))
+        return
+    if action == 'referral':
+        await send_main_message(user_id, get_text(user_id, 'referral_text', referral_link='—'), back_to_menu_keyboard(user_id))
+        return
+
+# ===== Language selection (inline) =====
+@dp.callback_query_handler(lang_cb.filter())
+async def lang_router(call: types.CallbackQuery, callback_data: dict):
+    user_id = call.from_user.id
+    lang = callback_data.get('language') or 'ru'
     try:
-        await send_temp_message(call.from_user.id, f"callback: <code>{call.data}</code>")
+        update_user_language(user_id, lang)
     except Exception:
         pass
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    await send_temp_message(user_id, get_text(user_id, 'language_changed'))
+    await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
+
+# ===== Requisites editing (inline -> FSM text input) =====
+@dp.callback_query_handler(req_cb.filter())
+async def req_router(call: types.CallbackQuery, callback_data: dict, state: FSMContext):
+    user_id = call.from_user.id
+    action = callback_data.get('action')
+    try:
+        await call.answer()
+    except Exception:
+        pass
+    if action == 'add_ton':
+        await state.set_state(Form.ton_wallet.state)
+        await send_main_message(user_id, get_text(user_id, 'add_ton'), ReplyKeyboardRemove())
+    elif action == 'add_card':
+        await state.set_state(Form.card_details.state)
+        await send_main_message(user_id, get_text(user_id, 'add_card'), ReplyKeyboardRemove())
+
+@dp.message_handler(state=Form.ton_wallet)
+async def handle_ton_wallet(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    ton = (message.text or '').strip()
+    if not ton or not ton.upper().startswith('UQ'):
+        await send_temp_message(user_id, get_text(user_id, 'ton_invalid'))
+        return
+    update_user_ton_wallet(user_id, ton)
+    await state.finish()
+    await send_temp_message(user_id, get_text(user_id, 'ton_saved'))
+    await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
+
+@dp.message_handler(state=Form.card_details)
+async def handle_card_details(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    details = (message.text or '').strip()
+    if not details or '-' not in details:
+        await send_temp_message(user_id, get_text(user_id, 'card_invalid'))
+        return
+    update_user_card_details(user_id, details)
+    await state.finish()
+    await send_temp_message(user_id, get_text(user_id, 'card_saved'))
+    await send_main_message(user_id, get_text(user_id, 'welcome'), main_menu_keyboard(user_id))
 
 def currency_reply_kb(user_id):
     return ReplyKeyboardMarkup(
