@@ -1090,8 +1090,12 @@ async def admin_del_special_state(message: types.Message, state: FSMContext):
             except Exception as e:
                 logger.error(f"Ошибка обработки реферальной ссылки: {e}")
         elif args.startswith('deal_'):
-            # Обработка ссылок на сделки через start
+            # Обработка старого формата ссылок на сделки через start
             await process_deal_link(message, args[5:])
+            return
+        elif args.startswith('pay_'):
+            # Обработка нового формата ссылок вида ?start=pay_<memo>
+            await process_deal_link(message, args[4:])
             return
 
     # Главное меню
@@ -1751,9 +1755,10 @@ async def process_deal_description(message: types.Message, state: FSMContext):
         
         create_deal(deal_id, memo_code, user_id, method_code, amount, currency, description)
         
-        # Формируем ссылку с использованием команды start для сделок (исправлено)
+        # Формируем рабочую deep-link ссылку через параметр start (Telegram поддерживает только start/startapp)
+        # Используем префикс pay_ чтобы /start корректно показал информацию о сделке
         bot_username = 'GlftElfOtcRobot_bot'
-        deal_link = f"https://t.me/{bot_username}?start=deal_{memo_code}"
+        deal_link = f"https://t.me/{bot_username}?start=pay_{memo_code}"
         clickable_deal_link = create_clickable_link(deal_link, "Нажмите для перехода к сделке")
         
         msg = get_text(user_id, 'deal_created', 
