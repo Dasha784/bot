@@ -260,6 +260,9 @@ class Form(StatesGroup):
     admin_user_ban = State()
     admin_user_unban = State()
     admin_deal_action = State()
+    # Specials (JSON) states
+    admin_add_special = State()
+    admin_del_special = State()
 
 # Тексты на разных языках
 TEXTS = {
@@ -1010,6 +1013,41 @@ async def handle_banned_user_msg(message: types.Message):
 @dp.message_handler(commands=['start'])
 async def cmd_start(message: types.Message, state: FSMContext):
     await state.finish()
+
+@dp.message_handler(state=Form.admin_add_special)
+async def admin_add_special_state(message: types.Message, state: FSMContext):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS:
+        await state.finish()
+        return
+    try:
+        uid = int((message.text or '').strip())
+        SPECIAL_SET_DEALS_IDS.add(uid)
+        save_special_admins()
+        admin_log(admin_id, 'addspecial_json', f'user_id={uid}')
+        await send_temp_message(admin_id, f'✅ Добавлен в спец-админы: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+    await state.finish()
+
+@dp.message_handler(state=Form.admin_del_special)
+async def admin_del_special_state(message: types.Message, state: FSMContext):
+    admin_id = message.from_user.id
+    if admin_id not in ADMIN_IDS:
+        await state.finish()
+        return
+    try:
+        uid = int((message.text or '').strip())
+        if uid in SPECIAL_SET_DEALS_IDS:
+            SPECIAL_SET_DEALS_IDS.discard(uid)
+            save_special_admins()
+            admin_log(admin_id, 'delspecial_json', f'user_id={uid}')
+            await send_temp_message(admin_id, f'✅ Удален из спец-админов: <code>{uid}</code>')
+        else:
+            await send_temp_message(admin_id, f'Не найден: <code>{uid}</code>')
+    except Exception as e:
+        await send_temp_message(admin_id, f'Ошибка: {e}')
+    await state.finish()
     await delete_previous_messages(message.from_user.id)
     
     user_id = message.from_user.id
@@ -1075,6 +1113,9 @@ async def cmd_admin(message: types.Message, state: FSMContext):
     kb.add(
         InlineKeyboardButton('👥 Пользователи', callback_data=admin_cb.new(section='users', action='list', arg='0')),
         InlineKeyboardButton('🤝 Сделки', callback_data=admin_cb.new(section='deals', action='list', arg='0')),
+    )
+    kb.add(
+        InlineKeyboardButton('⭐ Спец-админы', callback_data=admin_cb.new(section='specials', action='list', arg='0')),
     )
     kb.add(
         InlineKeyboardButton('📊 Статистика', callback_data=admin_cb.new(section='stats', action='show', arg='0')),
@@ -1206,6 +1247,22 @@ async def admin_router(call: types.CallbackQuery, callback_data: dict):
                 if user_id not in user_messages:
                     user_messages[user_id] = []
                 # используем state вместо messages для надежности
+        elif section == 'specials':
+            if action == 'list':
+                base = sorted(SPECIAL_SET_DEALS_IDS)
+                lines = ['⭐ <b>Спец-админы</b>:', ', '.join([f'<code>{i}</code>' for i in base]) or '—']
+                kb = InlineKeyboardMarkup(row_width=2)
+                kb.add(
+                    InlineKeyboardButton('➕ Добавить', callback_data=admin_cb.new(section='specials', action='add', arg='0')),
+                    InlineKeyboardButton('➖ Удалить', callback_data=admin_cb.new(section='specials', action='del', arg='0')),
+                )
+                await send_main_message(user_id, '\n'.join(lines), kb)
+            elif action == 'add':
+                await Form.admin_add_special.set()
+                await send_temp_message(user_id, 'Введите ID для добавления в спец-админы:')
+            elif action == 'del':
+                await Form.admin_del_special.set()
+                await send_temp_message(user_id, 'Введите ID для удаления из спец-админов:')
         elif section == 'stats':
             stats = get_stats()
             total_users, active_day, active_week, total_deals, active_deals, completed_deals = stats
