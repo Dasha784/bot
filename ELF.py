@@ -122,6 +122,12 @@ def init_db():
         )
     ''')
 
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS admins (
+            user_id INTEGER PRIMARY KEY
+        )
+    ''')
+
     # Миграции: добавляем при необходимости недостающие колонки
     cursor.execute("PRAGMA table_info(users)")
     cols = {row[1] for row in cursor.fetchall()}
@@ -208,6 +214,28 @@ def is_special_user(user_id: int) -> bool:
     ok = cur.fetchone() is not None
     conn.close()
     return ok
+
+def add_admin(user_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('INSERT OR IGNORE INTO admins (user_id) VALUES (?)', (user_id,))
+    conn.commit()
+    conn.close()
+
+def remove_admin(user_id: int):
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('DELETE FROM admins WHERE user_id = ?', (user_id,))
+    conn.commit()
+    conn.close()
+
+def list_admins():
+    conn = get_db_connection()
+    cur = conn.cursor()
+    cur.execute('SELECT user_id FROM admins ORDER BY user_id')
+    rows = [r[0] for r in cur.fetchall()]
+    conn.close()
+    return rows
 
 # Состояния для FSM
 class Form(StatesGroup):
