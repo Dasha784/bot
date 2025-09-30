@@ -39,7 +39,7 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
 # Чат поддержки для пересылки обращений пользователей (можно переопределить через SUPPORT_CHAT_ID)
-SUPPORT_CHAT_ID = int(os.getenv('SUPPORT_CHAT_ID', '4916379829'))
+SUPPORT_CHAT_ID = int(os.getenv('SUPPORT_CHAT_ID', '-4916379829'))
 # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
 SPECIAL_SET_DEALS_IDS = set()
 
