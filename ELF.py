@@ -1,3 +1,4 @@
+
 import logging
 import os
 import sqlite3
@@ -38,8 +39,6 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 
 # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
-# Чат поддержки для пересылки обращений пользователей (можно переопределить через SUPPORT_CHAT_ID)
-SUPPORT_CHAT_ID = int(os.getenv('SUPPORT_CHAT_ID', ''))
 # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
 SPECIAL_SET_DEALS_IDS = set()
 
@@ -266,8 +265,6 @@ class Form(StatesGroup):
     # Specials (JSON) states
     admin_add_special = State()
     admin_del_special = State()
-    # Support state
-    support_message = State()
 
 # Тексты на разных языках
 TEXTS = {
@@ -400,16 +397,6 @@ https://t.me/otcgifttg/113382/113404
 
 ⏰ <b>Мы доступны 24/7</b>
 """,
-        'support_prompt': (
-            "📩 <b>Связь с поддержкой</b>\n\n"
-            "Опишите вашу проблему, жалобу или предложение в одном сообщении.\n\n"
-            "🧾 <i>Пример:</i> ‘Не пришло подтверждение оплаты по сделке #AB12CD34’\n\n"
-            "📎 Можно прикрепить скрины, фото, голосовые или документы."
-        ),
-        'support_thanks': (
-            "✅ Спасибо! Ваше обращение отправлено администратору.\n"
-            "👨‍💼 Мы обработаем его в ближайшее время — ожидайте ответ."
-        ),
         'buy_usage': "❌ <b>Использование:</b> <code>/buy код_мемo</code>",
         'deal_not_found': "❌ <b>Сделка не найдена!</b>",
         'own_deal_payment': "❌ <b>Вы не можете оплачивать свою сделку!</b>",
@@ -561,16 +548,6 @@ For any questions contact:
 
 ⏰ <b>We are available 24/7</b>
 """,
-        'support_prompt': (
-            "📩 <b>Contact support</b>\n\n"
-            "Describe your issue, complaint or suggestion in one message.\n\n"
-            "🧾 <i>Example:</i> ‘Payment confirmation didn’t arrive for deal #AB12CD34’\n\n"
-            "📎 You may attach screenshots, photos, voice or documents."
-        ),
-        'support_thanks': (
-            "✅ Thank you! Your message has been sent to our admins.\n"
-            "👨‍💼 We’ll review it shortly — please wait for a reply."
-        ),
         'buy_usage': "❌ <b>Usage:</b> <code>/buy memo_code</code>",
         'deal_not_found': "❌ <b>Deal not found!</b>",
         'own_deal_payment': "❌ <b>You cannot pay for your own deal!</b>",
@@ -1693,53 +1670,6 @@ async def main_menu_callback(call: types.CallbackQuery):
     await send_main_message(user_id, welcome_text, main_menu_keyboard(user_id))
     await call.answer()
 
-# Прием сообщения для поддержки и пересылка в канал/админам
-@dp.message_handler(state=Form.support_message, content_types=types.ContentType.ANY)
-async def process_support_message(message: types.Message, state: FSMContext):
-    try:
-        user_id = message.from_user.id
-        update_last_active(user_id)
-
-        uname = f"@{message.from_user.username}" if message.from_user.username else (message.from_user.full_name or "user")
-        user_link = f"tg://user?id={user_id}"
-        header = (
-            "🆘 <b>Новое обращение в поддержку</b>\n"
-            f"👤 Пользователь: {uname}\n"
-            f"🆔 ID: <code>{user_id}</code>\n"
-            f"🔗 <a href=\"{user_link}\">Открыть профиль</a>"
-        )
-
-        async def send_to_target(chat_id: int):
-            try:
-                await bot.send_message(chat_id, header, parse_mode='HTML')
-                # Копируем исходное сообщение пользователя (любой тип контента)
-                await bot.copy_message(chat_id, from_chat_id=message.chat.id, message_id=message.message_id)
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to forward support message to {chat_id}: {e}")
-                return False
-
-        delivered = False
-        if SUPPORT_CHAT_ID:
-            delivered = await send_to_target(SUPPORT_CHAT_ID)
-
-        if not delivered:
-            # Резервно рассылаем всем админам в ЛС
-            for aid in ADMIN_IDS:
-                ok = await send_to_target(aid)
-                delivered = delivered or ok
-
-        # Благодарим пользователя
-        try:
-            await send_main_message(user_id, get_text(user_id, 'support_thanks'), back_to_menu_keyboard(user_id))
-        except Exception:
-            pass
-    finally:
-        try:
-            await state.finish()
-        except Exception:
-            pass
-
 @dp.callback_query_handler(menu_cb.filter(action="requisites"))
 async def requisites_callback(call: types.CallbackQuery):
     if not call or not call.from_user:
@@ -1949,9 +1879,7 @@ async def support_callback(call: types.CallbackQuery):
     if not call or not call.from_user:
         return
     user_id = call.from_user.id
-    # Запускаем FSM для сбора сообщения поддержки
-    await Form.support_message.set()
-    await send_main_message(user_id, get_text(user_id, 'support_prompt'), back_to_menu_keyboard(user_id))
+    await send_main_message(user_id, get_text(user_id, 'support_text'), back_to_menu_keyboard(user_id))
     await call.answer()
 
 # Fallback: логируем любые неожиданные callback'и
