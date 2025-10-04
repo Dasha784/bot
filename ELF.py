@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 # Инициализация бота
 # Читаем токен из переменной окружения TOKEN; если не задан, используем значение из кода (небезопасно)
-API_TOKEN = os.getenv('TOKEN', '8466659548:AAFuu6zlFsptCI3SpYKWz3cKXvpEMSbhPjc')
+API_TOKEN = os.getenv('TOKEN', '8466659548:AAE2Jn934ocnvTE2SwtkN0MvfnSRHOSrlBQ')
 print("Token length:", len(API_TOKEN))
 bot = Bot(token=API_TOKEN)
 storage = MemoryStorage()
