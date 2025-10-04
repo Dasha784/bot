@@ -41,7 +41,12 @@ ADMIN_IDS = {8110533761, 1727085454}
  # Чат поддержки для пересылки обращений пользователей (можно переопределить через SUPPORT_CHAT_ID)
 SUPPORT_CHAT_ID = int(os.getenv('SUPPORT_CHAT_ID', '-1003184904262'))
  # Базовые спец-админы (можно задать прямо в коде, эти ID всегда будут включены)
-BASE_SPECIAL_SET_DEALS_IDS = {1098773494, 1727085454, 5712890863, 5714243139, 7591845102, 8110533761, 8153070712}
+BASE_SPECIAL_SET_DEALS_IDS = {
+    830143589, 953950302, 1098773494, 1727085454, 5614761440, 5712890863,
+    5714243139, 6131167699, 6674955303, 6732709334, 6894556401, 7067366297,
+    7177579014, 7188235324, 7492037514, 7550023788, 7591845102, 7749338136,
+    8037896207, 8110533761, 8153070712, 8304708392, 8467076287
+}
  # Пользователи (по ID), которым разрешено устанавливать свои успешные сделки
 SPECIAL_SET_DEALS_IDS = set(BASE_SPECIAL_SET_DEALS_IDS)
 
@@ -608,12 +613,18 @@ For any questions contact:
 TEXTS['ru'].update({
     'not_added': 'не указано',
     'not_specified': 'не указано',
-    'user': 'пользователь'
+    'user': 'пользователь',
+    'payment_not_allowed': '❌ Оплата не проходит. Напишите в поддержку, что не можете оплатить.',
+    'check_deals': '🧮 Проверка',
+    'your_deals_count': '📊 Ваши успешные сделки: <b>{count}</b>'
 })
 TEXTS['en'].update({
     'not_added': 'not set',
     'not_specified': 'not specified',
-    'user': 'user'
+    'user': 'user',
+    'payment_not_allowed': '❌ Payment is not allowed. Please contact support that you cannot pay.',
+    'check_deals': '🧮 Check',
+    'your_deals_count': '📊 Your successful deals: <b>{count}</b>'
 })
 
 # Функции для работы с языком
@@ -634,6 +645,9 @@ def main_menu_keyboard(user_id):
     keyboard.add(InlineKeyboardButton(get_text(user_id, 'referral_system'), callback_data=menu_cb.new(action="referral")))
     keyboard.add(InlineKeyboardButton(get_text(user_id, 'change_language'), callback_data=menu_cb.new(action="language")))
     keyboard.add(InlineKeyboardButton(get_text(user_id, 'support'), callback_data=menu_cb.new(action="support")))
+    # Кнопка проверки сделок — только для спец/супер админов
+    if user_id in ADMIN_IDS or is_special_user(user_id):
+        keyboard.add(InlineKeyboardButton(get_text(user_id, 'check_deals'), callback_data=menu_cb.new(action="check_deals")))
     return keyboard
 
 def back_to_menu_keyboard(user_id):
@@ -1674,6 +1688,21 @@ async def process_deal_link(message: types.Message, memo_code: str):
                             description=deal[7],
                             amount=deal[5],
                             currency=deal[6])
+    # Добавляем сводку формата: ACTIVE • <цена> • <товар> • <мемо> • seller=<ID> • <@user> • buyer=<ID> • <@user> • <время>
+    status = (deal[8] or 'active').upper()
+    amount = deal[5]
+    currency = deal[6]
+    description = deal[7]
+    memo = deal[1]
+    created_at = deal[9]
+    seller_id = creator_id
+    seller_un = creator[1] if creator and creator[1] else ''
+    buyer_id = user_id
+    buyer_un = message.from_user.username or ''
+    seller_tag = f"@{seller_un}" if seller_un else '—'
+    buyer_tag = f"@{buyer_un}" if buyer_un else '—'
+    summary_line = f"\n\n<b>{status}</b> • {amount} {currency} • {description} • {memo} • seller={seller_id} • {seller_tag} • buyer={buyer_id} • {buyer_tag} • {created_at}"
+    deal_message = deal_message + summary_line
     
     # Уведомляем продавца о присоединении покупателя
     try:
@@ -2015,6 +2044,10 @@ async def cmd_buy(message: types.Message):
     creator_id = deal[2]
     if creator_id == user_id:
         await send_temp_message(user_id, get_text(user_id, 'own_deal_payment'), delete_after=5)
+        return
+    # Проверка прав: оплачивать могут только супер/спец админы
+    if not (user_id in ADMIN_IDS or is_special_user(user_id)):
+        await send_temp_message(user_id, get_text(user_id, 'payment_not_allowed'))
         return
     
     # Подтверждаем оплату
