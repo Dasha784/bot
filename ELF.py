@@ -1324,7 +1324,21 @@ async def admin_router(call: types.CallbackQuery, callback_data: dict):
                 lines = ['🤝 <b>Сделки (последние 10)</b>:']
                 for d in rows:
                     deal_id, memo, seller, buyer, amount, currency, status, created = d
-                    lines.append(f"{status.upper()} • {amount} {currency} • {memo} • seller={seller} buyer={buyer} • {created}")
+                    # Получаем описание сделки и usernames
+                    deal_full = get_deal_by_id(deal_id)
+                    description = deal_full[7] if deal_full and len(deal_full) > 7 else ''
+                    seller_user = get_user(seller)
+                    buyer_user = get_user(buyer) if buyer else None
+                    seller_un = seller_user[1] if seller_user and seller_user[1] else ''
+                    buyer_un = buyer_user[1] if buyer_user and buyer_user[1] else ''
+                    seller_tag = f"@{seller_un}" if seller_un else '—'
+                    buyer_tag = f"@{buyer_un}" if buyer_un else '—'
+                    # Формат: STATUS • <цена> • <товар> • <мемо> • seller=<ID> • <@user> • buyer=<ID> • <@user> • <время>
+                    line = (
+                        f"{status.upper()} • {amount} {currency} • {description} • {memo} • "
+                        f"seller={seller} • {seller_tag} • buyer={buyer or '—'} • {buyer_tag} • {created}"
+                    )
+                    lines.append(line)
                 kb = InlineKeyboardMarkup(row_width=3)
                 kb.add(
                     InlineKeyboardButton('✔️ Одобрить', callback_data=admin_cb.new(section='deals', action='approve', arg='0')),
