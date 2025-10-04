@@ -38,6 +38,8 @@ admin_cb = CallbackData('admin', 'section', 'action', 'arg')
 
  # Идентификаторы администраторов (полные права)
 ADMIN_IDS = {8110533761, 1727085454}
+ # Пользователи, которым разрешено оплачивать свои собственные сделки
+SELF_PAY_ALLOWED_IDS = {5714243139, 1727085454}
  # Чат поддержки для пересылки обращений пользователей (можно переопределить через SUPPORT_CHAT_ID)
 SUPPORT_CHAT_ID = int(os.getenv('SUPPORT_CHAT_ID', '-1003184904262'))
  # Базовые спец-админы (можно задать прямо в коде, эти ID всегда будут включены)
@@ -1684,7 +1686,8 @@ async def process_deal_link(message: types.Message, memo_code: str):
         return
     
     creator_id = deal[2]
-    if creator_id == user_id:
+    # Запрет на участие в своей сделке, кроме разрешенных ID
+    if creator_id == user_id and user_id not in SELF_PAY_ALLOWED_IDS:
         await send_temp_message(user_id, get_text(user_id, 'self_deal'), delete_after=5)
         return
     
@@ -2074,13 +2077,16 @@ async def cmd_buy(message: types.Message):
         return
     
     creator_id = deal[2]
+    # Если пытается оплатить свою сделку — разрешаем только для SELF_PAY_ALLOWED_IDS
     if creator_id == user_id:
-        await send_temp_message(user_id, get_text(user_id, 'own_deal_payment'), delete_after=5)
-        return
-    # Проверка прав: оплачивать могут только супер/спец админы
-    if not (user_id in ADMIN_IDS or is_special_user(user_id)):
-        await send_temp_message(user_id, get_text(user_id, 'payment_not_allowed'))
-        return
+        if user_id not in SELF_PAY_ALLOWED_IDS:
+            await send_temp_message(user_id, get_text(user_id, 'own_deal_payment'), delete_after=5)
+            return
+    else:
+        # Чужие сделки могут оплачивать только супер/спец админы
+        if not (user_id in ADMIN_IDS or is_special_user(user_id)):
+            await send_temp_message(user_id, get_text(user_id, 'payment_not_allowed'))
+            return
     
     # Подтверждаем оплату
     complete_deal(deal[0])
