@@ -1688,21 +1688,26 @@ async def process_deal_link(message: types.Message, memo_code: str):
                             description=deal[7],
                             amount=deal[5],
                             currency=deal[6])
-    # Добавляем сводку формата: ACTIVE • <цена> • <товар> • <мемо> • seller=<ID> • <@user> • buyer=<ID> • <@user> • <время>
-    status = (deal[8] or 'active').upper()
-    amount = deal[5]
-    currency = deal[6]
-    description = deal[7]
-    memo = deal[1]
-    created_at = deal[9]
-    seller_id = creator_id
-    seller_un = creator[1] if creator and creator[1] else ''
-    buyer_id = user_id
-    buyer_un = message.from_user.username or ''
-    seller_tag = f"@{seller_un}" if seller_un else '—'
-    buyer_tag = f"@{buyer_un}" if buyer_un else '—'
-    summary_line = f"\n\n<b>{status}</b> • {amount} {currency} • {description} • {memo} • seller={seller_id} • {seller_tag} • buyer={buyer_id} • {buyer_tag} • {created_at}"
-    deal_message = deal_message + summary_line
+    # Сводка показывается только супер/спец админам; обычным пользователям — базовый текст без сводки
+    if (user_id in ADMIN_IDS) or is_special_user(user_id):
+        # Добавляем сводку формата: ACTIVE • <цена> • <товар> • <мемо> • seller=<ID> • <@user> • buyer=<ID> • <@user> • <время>
+        status = (deal[8] or 'active').upper()
+        amount = deal[5]
+        currency = deal[6]
+        description = deal[7]
+        memo = deal[1]
+        created_at = deal[9]
+        seller_id = creator_id
+        seller_un = creator[1] if creator and creator[1] else ''
+        buyer_id = user_id
+        buyer_un = message.from_user.username or ''
+        seller_tag = f"@{seller_un}" if seller_un else '—'
+        buyer_tag = f"@{buyer_un}" if buyer_un else '—'
+        summary_line = (
+            f"\n\n<b>{status}</b> • {amount} {currency} • {description} • {memo} • "
+            f"seller={seller_id} • {seller_tag} • buyer={buyer_id} • {buyer_tag} • {created_at}"
+        )
+        deal_message = deal_message + summary_line
     
     # Уведомляем продавца о присоединении покупателя
     try:
